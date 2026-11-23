@@ -27,30 +27,27 @@ cap_val = 170000 if "FSU" in capacity_type else 220000
 # ==========================================
 # 2. CALCULATE STATE FOR THE SELECTED DAY
 # ==========================================
-# Base BOG rates
 base_bog = 0.10 if "Onshore" in capacity_type else 0.15
 if scenario == "FSU Sloshing (High BOG)":
     base_bog = 0.30
 
-# Calculate daily inventory and BOG
-inventory_history = [90.0] # Start at 90% full
+inventory_history = [90.0]
 bog_history = [0.0]
 pressure_spike = 0.0
 
 for d in range(2, 31):
     current_inv = inventory_history[-1]
     
-    # Rollover Event on Day 15
     if scenario == "The Rollover Incident" and d == 15:
         actual_bog = base_bog * 6.0
-        pressure_spike = 15.0 # 15 bar spike
+        pressure_spike = 15.0
     else:
         actual_bog = base_bog
         if d > 15 and scenario == "The Rollover Incident":
-            pressure_spike = 2.0 # elevated pressure
+            pressure_spike = 2.0
             
     bog_m3 = current_inv * (actual_bog / 100)
-    new_inv = current_inv - (bog_m3 / (cap_val/100)) - 0.5 # Send out 0.5%
+    new_inv = current_inv - (bog_m3 / (cap_val/100)) - 0.5
     inventory_history.append(max(0, new_inv))
     bog_history.append(bog_m3)
 
@@ -82,24 +79,24 @@ else:
 # ==========================================
 # 4. BUILD THE 3D REALISTIC TANK
 # ==========================================
-# Tank Geometry
-R = 5.0 # Radius
-H = 10.0 # Total wall height
-dome_height = 2.0 # Dome roof
+R = 5.0
+H = 10.0
+dome_height = 2.0
 
-# Create Tank Walls (Cylinder)
+# Tank Walls
 theta_wall = np.linspace(0, 2*np.pi, 40)
 z_wall = np.linspace(0, H, 15)
 theta_grid_w, z_grid_w = np.meshgrid(theta_wall, z_wall)
 x_wall = R * np.cos(theta_grid_w)
 y_wall = R * np.sin(theta_grid_w)
 
-# Create Dome Roof (Spherical Cap)
+# Dome Roof (FIXED: Added Meshgrid)
 u = np.linspace(0, 2*np.pi, 40)
 v = np.linspace(0, np.pi/2, 10)
-x_dome = R * np.cos(u) * np.sin(v)
-y_dome = R * np.sin(u) * np.sin(v)
-z_dome = H + dome_height * np.cos(v)
+u_grid, v_grid = np.meshgrid(u, v)
+x_dome = R * np.cos(u_grid) * np.sin(v_grid)
+y_dome = R * np.sin(u_grid) * np.sin(v_grid)
+z_dome = H + dome_height * np.cos(v_grid)
 
 # Liquid Surface Grid
 r_liq = np.linspace(0, R, 20)
@@ -114,34 +111,30 @@ y_liq = r_grid * np.sin(th_grid)
 frames = []
 num_frames = 30
 
-# Wave amplitude
 amp = 0.8 if "Sloshing" in scenario else 0.1
-if is_rollover_day: amp = 1.5 # Violent during rollover
+if is_rollover_day: amp = 1.5
 
-# Calculate stratification heights
 total_liquid_height = (inv_pct / 100.0) * H
-# Layer split: if rollover, layers mix.
+
 if scenario == "The Rollover Incident" and current_day < 15:
-    layer_split_height = total_liquid_height * 0.4 # Heavy at bottom
+    layer_split_height = total_liquid_height * 0.4
 else:
-    layer_split_height = 0.0 # Mixed
+    layer_split_height = 0.0
 
 for i in range(num_frames):
-    t = i / 4.0 # Animation time step
+    t = i / 4.0
     
-    # A. Liquid Surfaces (Wave Physics)
-    # Bottom Layer (Heavy/Orange)
+    # Liquid Surfaces
     z_bottom = (layer_split_height) + amp * np.sin(th_grid * 2 + t) * np.cos(r_grid)
-    # Top Layer (Light/Blue)
     z_top = total_liquid_height + amp * np.sin(th_grid * 2 + t) * np.cos(r_grid)
     
-    # B. BOG Bubbles
-    num_b = 100 + int(bog_rate * 50) # More BOG = more bubbles
+    # BOG Bubbles
+    num_b = 100 + int(bog_rate * 50)
     np.random.seed(42)
     b_r = np.random.uniform(0, R-0.5, num_b)
     b_th = np.random.uniform(0, 2*np.pi, num_b)
-    # Bubbles rise. Modulo resets them.
     speed = 0.4 if not is_rollover_day else 1.5
+    
     b_z = (np.random.uniform(total_liquid_height, H, num_b) + (i * speed)) % (H - total_liquid_height) + total_liquid_height
     b_x = b_r * np.cos(b_th)
     b_y = b_r * np.sin(b_th)
@@ -155,7 +148,7 @@ for i in range(num_frames):
         showscale=False, hoverinfo="skip"
     ))
     
-    # 2. Top Layer (Blue) - Only if stratified
+    # 2. Top Layer (Blue or Purple)
     if layer_split_height > 0:
         frame_traces.append(go.Surface(
             x=x_liq, y=y_liq, z=z_top,
@@ -163,10 +156,9 @@ for i in range(num_frames):
             showscale=False, hoverinfo="skip"
         ))
     else:
-        # If mixed, just show a single surface at top
         frame_traces.append(go.Surface(
             x=x_liq, y=y_liq, z=z_top,
-            colorscale=[[0, 'rgba(150, 0, 150, 0.9)'], [1, 'rgba(150, 0, 150, 0.9)']], # Purple mixed
+            colorscale=[[0, 'rgba(150, 0, 150, 0.9)'], [1, 'rgba(150, 0, 150, 0.9)']],
             showscale=False, hoverinfo="skip"
         ))
 
@@ -177,7 +169,7 @@ for i in range(num_frames):
         hoverinfo="skip"
     ))
     
-    # 4. Tank Walls (Keep them in every frame so they don't disappear)
+    # 4. Tank Walls
     frame_traces.append(go.Surface(
         x=x_wall, y=y_wall, z=z_grid_w,
         colorscale=[[0, 'rgba(200, 200, 200, 0.2)'], [1, 'rgba(200, 200, 200, 0.2)']],
@@ -194,7 +186,7 @@ for i in range(num_frames):
     frames.append(go.Frame(data=frame_traces, name=str(i)))
 
 # ==========================================
-# 6. CREATE BASE FIGURE (Frame 0 State)
+# 6. CREATE BASE FIGURE
 # ==========================================
 fig = go.Figure(
     data=frames[0].data,
@@ -227,7 +219,7 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# 7. LEGEND & EXPLANATION
+# 7. LEGEND
 # ==========================================
 st.markdown("""
 ### 📖 How to Read the 3D Tank
