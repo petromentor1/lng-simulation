@@ -7,16 +7,15 @@ from plotly.subplots import make_subplots
 st.set_page_config(layout="wide", page_title="SA LNG & CCGT Master Dashboard")
 
 st.title("🇿🇦 South Africa LNG Import & Power Generation Master Dashboard")
-st.markdown("Use the sidebar to control the simulation. Navigate through the tabs below to view 3D tank dynamics, operational scenarios, and CCGT economics.")
 
 # ==========================================
-# 1. SIDEBAR CONTROLS (GLOBAL)
+# 1. SIDEBAR CONTROLS
 # ==========================================
 st.sidebar.header("🕹️ Global Controls")
 
 scenario = st.sidebar.selectbox(
     "Select Scenario", 
-    ["Normal Operations", "The Rollover Incident", "FSU Sloshing (High BOG)"]
+    ["Normal Operations (with Cargo Deliveries)", "The Rollover Incident", "FSU Sloshing (High BOG)"]
 )
 
 storage_type = st.sidebar.radio("Storage Type", ["FSU (170,000 m³)", "Onshore (220,000 m³)"])
@@ -29,40 +28,50 @@ send_out_mtpa = st.sidebar.slider("Send-Out Rate (Mtpa)", 1.0, 5.0, 3.0, 0.1)
 cold_energy_toggle = st.sidebar.checkbox("Enable LNG Cold Energy Integration", value=True)
 
 # ==========================================
-# 2. BACKGROUND CALCULATIONS (ALL 30 DAYS)
+# 2. BACKGROUND CALCULATIONS (30 DAYS)
 # ==========================================
-# LNG Physics Setup
 base_bog = 0.10 if "Onshore" in storage_type else 0.15
 if scenario == "FSU Sloshing (High BOG)" and "FSU" in storage_type:
     base_bog = 0.30
 
-lng_density = 450.0 # kg/m3 (Average)
-send_out_m3_day = ((send_out_mtpa * 1e6) / 365 * 1000) / lng_density
+lng_density = 450.0 # kg/m3
+# Convert Mtpa to m3/day
+send_out_m3_day = ((send_out_mtpa * 1e9) / 365) / lng_density 
+send_out_pct = (send_out_m3_day / cap_val) * 100
 
-inv_hist = [90.0] # Start at 90% full
-bog_hist = [0.0]
+inv_hist = [90.0] # Start 90% full
+bog_hist = []
 press_hist = [1.05]
+cargo_days = []
 
-for d in range(2, 31):
+for d in range(1, 31):
     current_inv = inv_hist[-1]
     
-    # Scenario Modifiers
+    # Calculate BOG
     if scenario == "The Rollover Incident" and d == 15:
-        actual_bog = base_bog * 6.0 # 6x spike
+        actual_bog_pct = base_bog * 6.0
         pressure = 16.05
     elif scenario == "The Rollover Incident" and d > 15:
-        actual_bog = base_bog
-        pressure = 3.05 # Elevated pressure post-rollover
+        actual_bog_pct = base_bog
+        pressure = 3.05
     else:
-        actual_bog = base_bog
+        actual_bog_pct = base_bog
         pressure = 1.05
         
-    bog_m3 = current_inv * (actual_bog / 100)
-    new_inv = current_inv - (bog_m3 / (cap_val/100)) - (send_out_m3_day / (cap_val/100))
+    bog_hist.append(current_inv * (actual_bog_pct / 100))
     
+    # Calculate New Inventory
+    new_inv = current_inv - (current_inv * (actual_bog_pct / 100)) - send_out_pct
+    
+    # Cargo Delivery Logic (If below 20%, refill to 90%)
+    if new_inv < 20.0 and scenario == "Normal Operations (with Cargo Deliveries)":
+        new_inv = 90.0
+        cargo_days.append(d)
+        press_hist.append(1.05) # Pressure normal
+    else:
+        press_hist.append(pressure)
+        
     inv_hist.append(max(0, new_inv))
-    bog_hist.append(bog_m3)
-    press_hist.append(pressure)
 
 # Current Day State
 inv_pct = inv_hist[current_day - 1]
@@ -71,17 +80,16 @@ current_pressure = press_hist[current_day - 1]
 is_rollover_day = (scenario == "The Rollover Incident" and current_day == 15)
 
 # CCGT Calculations
-base_eff = 0.4922 # 49.22%
-boosted_eff = 0.5831 # 58.31%
+base_eff = 0.4922
+boosted_eff = 0.5831
 eff = boosted_eff if cold_energy_toggle else base_eff
-
-power_mw = (send_out_mtpa * 1e6 * 1000 * 48 * eff) / (365 * 24 * 3600) # Approx 48 MJ/kg LNG
-revenue_zar = power_mw * 1000 * 24 * 2.50 # R2.50/kWh
+power_mw = (send_out_mtpa * 1e9 * 48 * eff) / (365 * 24 * 3600)
+revenue_zar = power_mw * 1000 * 24 * 2.50
 
 # ==========================================
 # 3. BUILD THE TABS
 # ==========================================
-tab1, tab2, tab3 = st.tabs(["🌊 3D Tank Dynamics & BOG", "⚡ CCGT Power & Economics", "📖 Case Studies & Physics"])
+tab1, tab2, tab3 = st.tabs(["🌊 3D Tank Dynamics", "⚡ CCGT Power & Economics", "📖 Case Studies & Physics"])
 
 # ==========================================
 # TAB 1: 3D TANK & DYNAMICS
@@ -95,13 +103,15 @@ with tab1:
     c3.metric("Tank Pressure", f"{current_pressure:.2f} bar", delta="SPIKE" if current_pressure > 2.0 else None, delta_color="inverse")
     
     if current_day < 15 and scenario == "The Rollover Incident":
-        c4.info("**Stratification:** Heavy (Orange) and Light (Blue) layers separated.")
+        c4.info("**Stratification Active:** Heavy (Orange) and Light (Blue) layers.")
     elif is_rollover_day:
-        c4.error("**ROLLOVER!** Layers mixed violently. Huge BOG spike.")
+        c4.error("**ROLLOVER!** Layers mixed violently. Massive BOG spike.")
+    elif current_day in cargo_days:
+        c4.success("**Cargo Delivered!** Tank refilled to 90%.")
     else:
-        c4.success("**Stable Operation.**")
+        c4.success("**Normal Operations.**")
 
-    # --- 3D ANIMATION CODE ---
+    # --- 3D TANK ANIMATION ---
     R, H, dome_h = 5.0, 10.0, 2.0
     th_w = np.linspace(0, 2*np.pi, 40); z_w = np.linspace(0, H, 15)
     th_gw, z_gw = np.meshgrid(th_w, z_w)
@@ -148,26 +158,38 @@ with tab1:
     fig3d.update_layout(
         scene=dict(xaxis=dict(visible=False, range=[-6,6]), yaxis=dict(visible=False, range=[-6,6]), zaxis=dict(visible=False, range=[0,13]),
                    camera=dict(eye=dict(x=1.5, y=1.5, z=0.8)), aspectmode='manual', aspectratio=dict(x=1,y=1,z=1.3)),
-        updatemenus=[dict(type="buttons", showactive=False, x=0.1, y=0, buttons=[
-            dict(label="▶️ Play Waves", method="animate", args=[None, dict(frame=dict(duration=100, redraw=True), fromcurrent=True)]),
-            dict(label="⏸️ Pause", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate")])
-        ])],
-        margin=dict(l=0, r=0, b=0, t=0), height=500, paper_bgcolor="#f4f4f4"
+        updatemenus=[dict(type="buttons", showactive=False, x=0.1, y=0,
+            buttons=[
+                dict(label="▶️ Play Waves", method="animate", args=[None, dict(frame=dict(duration=100, redraw=True), fromcurrent=True)]),
+                dict(label="⏸️ Pause", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate")])
+            ])],
+        margin=dict(l=0, r=0, b=0, t=0), height=450, paper_bgcolor="#f4f4f4"
     )
     st.plotly_chart(fig3d, use_container_width=True)
 
     # --- 30 DAY GRAPH ---
-    df_ops = pd.DataFrame({'Day': range(1, 31), 'Inventory (%)': inv_hist, 'BOG Rate (%/day)': bog_hist, 'Pressure (bar)': press_hist})
+    df_ops = pd.DataFrame({'Day': range(1, 31), 'Inventory (%)': inv_hist[:-1], 'BOG Rate (%/day)': bog_hist, 'Pressure (bar)': press_hist[:-1]})
     fig_ops = make_subplots(specs=[[{"secondary_y": True}]])
     fig_ops.add_trace(go.Scatter(x=df_ops['Day'], y=df_ops['Inventory (%)'], name='Inventory (%)', line=dict(color='blue', width=3)), secondary_y=False)
     fig_ops.add_trace(go.Scatter(x=df_ops['Day'], y=df_ops['BOG Rate (%/day)'], name='BOG Rate', line=dict(color='red', dash='dot')), secondary_y=True)
     if scenario == "The Rollover Incident":
         fig_ops.add_trace(go.Scatter(x=df_ops['Day'], y=df_ops['Pressure (bar)'], name='Pressure (bar)', line=dict(color='orange', width=2)), secondary_y=True)
+    
     fig_ops.add_vline(x=current_day, line_width=3, line_dash="dash", line_color="green")
-    fig_ops.update_layout(title="30-Day Operational Trends", hovermode="x unified", height=400, margin=dict(l=0, r=0, t=40, b=0), legend=dict(orientation="h", y=1.02, x=1))
+    fig_ops.update_layout(title="30-Day Operational Trends", hovermode="x unified", height=350, margin=dict(l=0, r=0, t=40, b=0), legend=dict(orientation="h", y=1.02, x=1))
     fig_ops.update_yaxes(title_text="Inventory (%)", secondary_y=False, range=[0, 100])
     fig_ops.update_yaxes(title_text="BOG / Pressure", secondary_y=True)
     st.plotly_chart(fig_ops, use_container_width=True)
+
+    # --- LEGEND ---
+    st.markdown("""
+    ### 📖 3D Tank Legend
+    *   **🟠 Orange Liquid (Bottom):** Dense, warmer LNG (caused by ground heat leak).
+    *   **🔵 Blue Liquid (Top):** Lighter, colder LNG from a fresh cargo.
+    *   **🟣 Purple Liquid:** Fully mixed LNG (this is what happens after a Rollover).
+    *   **⚪ White Bubbles:** Boil-Off Gas (BOG) rising to the top.
+    *   **Silver Dome:** The insulated roof of the LNG storage tank.
+    """)
 
 # ==========================================
 # TAB 2: CCGT POWER & ECONOMICS
@@ -182,8 +204,7 @@ with tab2:
     st.markdown("### The Impact of LNG Cold Energy")
     st.markdown("When LNG regasifies, it releases immense cold energy. By integrating this with the CCGT, we can boost efficiency dramatically.")
     
-    # Efficiency Comparison Chart
-    base_power = (send_out_mtpa * 1e6 * 1000 * 48 * base_eff) / (365 * 24 * 3600)
+    base_power = (send_out_mtpa * 1e9 * 48 * base_eff) / (365 * 24 * 3600)
     
     fig_ccgt = go.Figure(data=[
         go.Bar(name='Base CCGT (49.2%)', x=['Power Output (MW)'], y=[base_power], marker_color='gray'),
@@ -198,7 +219,7 @@ with tab2:
 # TAB 3: CASE STUDIES
 # ==========================================
 with tab3:
-    st.subheader("📖 Real-World Case Studies")
+    st.subheader("📖 Real-World Case Studies & Footnotes")
     
     st.markdown("### 1. The Zeebrugge LNG Rollover (Belgium, 2014)")
     st.markdown("""
@@ -214,9 +235,9 @@ with tab3:
     *   **The Result:** A floating tank generates 50% to 100% more BOG than an onshore concrete tank. While an FSU is cheaper to build (CAPEX), the daily BOG losses add up to millions of Rand over 20 years (OPEX).
     """)
 
-    st.markdown("### 3. LNG Cold Energy Utilization")
+    st.markdown("### 3. Normal Operations & Cargo Deliveries")
     st.markdown("""
-    *   **How to simulate:** Look at the **CCGT Power** tab and toggle the **'Enable LNG Cold Energy Integration'** checkbox.
-    *   **What happened:** Regasifying LNG from -162°C to ambient temperature requires massive heat. Normally, seawater is used. But in an integrated plant, we use the CCGT's waste heat to vaporize the LNG.
-    *   **The Result:** The efficiency of the CCGT jumps from ~49% to ~58%. This is the secret to making the South African Richards Bay LNG project highly profitable!
+    *   **How to simulate:** Look at the **30-Day Operational Trends** graph for 'Normal Operations'.
+    *   **Why does the inventory spike up?** The sudden spikes you see on the blue line are **Cargo Deliveries**. A real LNG plant consumes gas daily (sending it to the CCGT), which drops the tank level. When the tank hits a 20% minimum threshold, a massive LNG carrier ship docks, and the tank is refilled to 90% in a single day.
+    *   **Why does the BOG rate drop after a delivery?** When a fresh, cold cargo is delivered, it cools the tank and lowers the internal temperature, temporarily suppressing the boil-off gas rate.
     """)
