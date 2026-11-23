@@ -4,182 +4,101 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 
-# Set page layout to wide
-st.set_page_config(layout="wide", page_title="South Africa LNG & CCGT Simulator")
+st.set_page_config(layout="wide", page_title="SA LNG Day 2: BOG & Storage Dynamics")
+
+st.title("🇿🇦 Day 2: LNG Thermodynamics, BOG, and Storage Dynamics")
+st.markdown("Use the sidebar to simulate scenarios. Watch the animated tank and graphs to see how real-world events affect stock levels and Boil-Off Gas (BOG).")
 
 # ==========================================
-# 1. APP TITLE & SIDEBAR CONTROLS (LIVE TOGGLES)
+# 1. SIDEBAR CONTROLS & SCENARIOS
 # ==========================================
-st.title("🇿🇦 South African LNG Import & CCGT Optimization")
-st.markdown("Use the control panel in the sidebar to toggle between FSU and Onshore storage, adjust thermodynamic parameters, and instantly see the impact on BOG generation, inventory, and CCGT power output.")
+st.sidebar.header("🕹️ Simulation Scenarios")
 
-st.sidebar.header("🕹️ Live Simulation Controls")
-
-# Storage Toggle
-storage_type = st.sidebar.radio("LNG Storage Type", ["FSU (Floating)", "Onshore Tank"])
-capacity_m3 = 170000 if storage_type == "FSU (Floating)" else 220000
-
-# Thermodynamic Inputs
-st.sidebar.subheader("Thermodynamics & Inventory")
-lng_density = st.sidebar.slider("LNG Density (kg/m³)", min_value=400.0, max_value=480.0, value=450.0, step=1.0)
-initial_fill_pct = st.sidebar.slider("Initial Tank Fill (%)", min_value=10, max_value=100, value=80, step=1)
-send_out_mtpa = st.sidebar.slider("Send-Out Rate (Mtpa)", min_value=1.0, max_value=5.0, value=3.0, step=0.1)
-
-# CCGT Inputs
-st.sidebar.subheader("CCGT Power Generation")
-cold_energy_toggle = st.sidebar.checkbox("Enable LNG Cold Energy Integration", value=True)
-base_eff = 0.4922 # 49.22%
-boosted_eff = 0.5831 # 58.31% (from literature)
-
-# BOG Rate Adjusters
-st.sidebar.subheader("BOG Rates")
-bog_rate_fsu = st.sidebar.slider("FSU BOG Rate (%/day)", 0.05, 0.25, 0.15, 0.01)
-bog_rate_onshore = st.sidebar.slider("Onshore BOG Rate (%/day)", 0.05, 0.25, 0.10, 0.01)
-
-# ==========================================
-# 2. SIMULATION LOGIC
-# ==========================================
-@st.cache_data
-def run_simulation(storage, cap_m3, density, fill_pct, send_out, bog_fsu, bog_onshore, cold_energy):
-    days = 30
-    initial_inventory = cap_m3 * (fill_pct / 100.0)
-    
-    # BOG Rate Selection based on toggle
-    daily_bog_rate = (bog_fsu / 100.0) if storage == "FSU (Floating)" else (bog_onshore / 100.0)
-    
-    # Conversions
-    send_out_mt_per_day = send_out * 1e6 / 365 # Metric tonnes per day
-    send_out_kg_per_day = send_out_mt_per_day * 1000
-    send_out_m3_per_day = send_out_kg_per_day / density
-    
-    # Initialise arrays
-    inventory = np.zeros(days)
-    bog_m3 = np.zeros(days)
-    bog_kg = np.zeros(days)
-    
-    current_inv = initial_inventory
-    
-    for i in range(days):
-        # Calculate BOG
-        daily_bog_m3 = current_inv * daily_bog_rate
-        bog_m3[i] = daily_bog_m3
-        bog_kg[i] = daily_bog_m3 * density
-        
-        # Update Inventory
-        current_inv = current_inv - daily_bog_m3 - send_out_m3_per_day
-        
-        # Refill logic (if below 10%, cargo arrives)
-        if current_inv < (cap_m3 * 0.1):
-            current_inv = cap_m3 * 0.9
-            
-        inventory[i] = current_inv
-
-    # CCGT Power Calculation
-    eff = boosted_eff if cold_energy else base_eff
-    # Assume 1 kg LNG = 48 MJ (Heating Value)
-    energy_mj_per_day = send_out_kg_per_day * 48
-    power_mw = (energy_mj_per_day * eff) / (24 * 3600)
-    
-    # Economics (Simplified)
-    # Assume electricity price R2.00/kWh, LNG cost $10/MMBtu (~R180/GJ)
-    revenue_per_day_zar = power_mw * 1000 * 24 * 2.00 
-    bog_waste_cost_zar = np.sum(bog_kg) * 0.048 * 180 # MJ to GJ
-    
-    df = pd.DataFrame({
-        'Day': np.arange(1, days + 1),
-        'Inventory (m³)': inventory,
-        'BOG (m³)': bog_m3,
-        'BOG (kg)': bog_kg,
-        'Inventory (%)': (inventory / cap_m3) * 100
-    })
-    
-    return df, power_mw, eff, revenue_per_day_zar, np.sum(bog_kg)
-
-df, power_mw, eff, revenue, total_bog_kg = run_simulation(
-    storage_type, capacity_m3, lng_density, initial_fill_pct, send_out_mtpa, 
-    bog_rate_fsu, bog_rate_onshore, cold_energy_toggle
+scenario = st.sidebar.selectbox(
+    "Select Scenario", 
+    ["Normal Operations", "The Rollover Incident", "FSU Sloshing (High BOG)"]
 )
 
-# ==========================================
-# 3. DASHBOARD LAYOUT & ANIMATED GAUGES
-# ==========================================
-col1, col2, col3, col4 = st.columns(4)
+capacity_m3 = st.sidebar.radio("Storage Type", ["FSU (170,000 m³)", "Onshore (220,000 m³)"])
+cap_val = 170000 if "FSU" in capacity_m3 else 220000
 
-# Animated Gauge for Inventory
-fig_gauge = go.Figure(go.Indicator(
-    mode = "gauge+number",
-    value = df['Inventory (%)'].iloc[-1],
-    title = {'text': "Current Inventory (%)"},
-    gauge = {
-        'axis': {'range': [None, 100]},
-        'bar': {'color': "#00CC96"},
-        'steps': [
-            {'range': [0, 15], 'color': "#EF553B"},   # Danger zone
-            {'range': [15, 85], 'color': "#636EFA"},  # Normal zone
-            {'range': [85, 100], 'color': "#AB63FA"}  # High zone
-        ],
-    }
-))
-fig_gauge.update_layout(height=250, margin=dict(l=10, r=10, t=40, b=10))
-col1.plotly_chart(fig_gauge, use_container_width=True)
-
-col2.metric("CCGT Power Output", f"{power_mw:,.1f} MW", f"{eff*100:.1f}% Efficiency")
-col3.metric("Total BOG Waste (30 Days)", f"{total_bog_kg/1000:,.1f} Tonnes", delta_color="inverse")
-col4.metric("Est. CCGT Revenue (Daily)", f"R {revenue:,.2f}", "ZAR")
+st.sidebar.subheader("Thermodynamic Parameters")
+lng_density = st.sidebar.slider("Initial LNG Density (kg/m³)", 400.0, 480.0, 450.0)
+send_out_mtpa = st.sidebar.slider("Send-Out Rate (Mtpa)", 1.0, 5.0, 3.0)
 
 # ==========================================
-# 4. TABS FOR DETAILED GRAPHS & SENSITIVITIES
+# 2. SIMULATION LOGIC (WITH SCENARIO EVENTS)
 # ==========================================
-tab1, tab2, tab3 = st.tabs(["📉 Inventory & BOG Dynamics", "⚡ CCGT Power & Economics", "🔬 Sensitivity Analysis"])
+days = 30
+initial_inv = cap_val * 0.9 # Start at 90%
+send_out_m3_day = ((send_out_mtpa * 1e6) / 365 * 1000) / lng_density
 
-with tab1:
-    st.subheader("LNG Inventory & BOG Tracking")
-    
-    fig_inv = px.line(df, x='Day', y='Inventory (%)', 
-                      title=f"{storage_type} - Tank Inventory (% Capacity)",
-                      markers=True, line_shape='spline')
-    fig_inv.update_traces(line_color='#00CC96', line_width=3)
-    fig_inv.update_layout(yaxis_title="Fill Percentage (%)", hovermode="x unified")
-    st.plotly_chart(fig_inv, use_container_width=True)
+inventory = []
+bog_rates = []
 
-    fig_bog = px.bar(df, x='Day', y='BOG (kg)', 
-                     title="Daily Boil-Off Gas (BOG) Generated (kg)",
-                     color='BOG (kg)', color_continuous_scale='Reds')
-    st.plotly_chart(fig_bog, use_container_width=True)
-
-with tab2:
-    st.subheader("CCGT Power Generation & Cold Energy Impact")
+for day in range(1, days + 1):
+    # Base BOG Rate
+    base_bog = 0.10 if "Onshore" in capacity_m3 else 0.15
     
-    # Efficiency Comparison Chart
-    labels = ['Base CCGT (No Cold Energy)', 'Integrated CCGT (With Cold Energy)']
-    power_outputs = [(power_mw / eff) * base_eff, power_mw if cold_energy_toggle else (power_mw / eff) * boosted_eff]
+    # Apply Scenario Modifiers
+    if scenario == "FSU Sloshing (High BOG)":
+        base_bog = 0.25 # Constant high boil-off due to wave motion
     
-    fig_power = go.Figure(data=[
-        go.Bar(name='Base Efficiency (49.2%)', x=labels, y=[power_outputs[0], power_outputs[0]], marker_color='gray'),
-        go.Bar(name='Optimized Efficiency (58.3%)', x=labels, y=[power_outputs[1], power_outputs[1]], marker_color='#FFA15A')
-    ])
-    fig_power.update_layout(barmode='group', title="Power Output Comparison (MW)", yaxis_title="Power (MW)")
-    st.plotly_chart(fig_power, use_container_width=True)
+    current_inv = initial_inv if day == 1 else inventory[-1]
     
-    st.info("**Why Cold Energy?** Regasifying LNG releases immense cold energy. By integrating this with the CCGT's Rankine cycle, we boost efficiency from ~49% to ~58%, dramatically improving plant economics.")
-
-with tab3:
-    st.subheader("Sensitivity: BOG Rate vs. Inventory Over Time")
-    st.markdown("This graph shows how changing the BOG rate affects the inventory. Play with the sliders on the left to see live updates.")
-    
-    # Simulate a range of BOG rates for sensitivity
-    sensitivity_bogs = [0.05, 0.10, 0.15, 0.20, 0.25]
-    fig_sens = go.Figure()
-    
-    for bog in sensitivity_bogs:
-        # Mini-simulation inside the loop for sensitivity
-        temp_df, _, _, _, _ = run_simulation(
-            storage_type, capacity_m3, lng_density, initial_fill_pct, send_out_mtpa, 
-            bog, bog, cold_energy_toggle
-        )
-        fig_sens.add_trace(go.Scatter(x=temp_df['Day'], y=temp_df['Inventory (%)'], 
-                                      mode='lines', name=f'BOG {bog}%'))
+    # The Rollover Event (Day 15)
+    if scenario == "The Rollover Incident" and day == 15:
+        actual_bog_rate = base_bog * 5.0 # 5x spike in BOG due to sudden mixing
+        st.sidebar.error("⚠️ ROLLOVER EVENT TRIGGERED ON DAY 15!")
+    else:
+        actual_bog_rate = base_bog
         
-    fig_sens.update_layout(title="Sensitivity: BOG Rate Impact on Inventory", 
-                           xaxis_title="Days", yaxis_title="Inventory (%)")
-    st.plotly_chart(fig_sens, use_container_width=True)
+    bog_m3 = current_inv * (actual_bog_rate / 100)
+    inventory.append(current_inv - bog_m3 - send_out_m3_day)
+    bog_rates.append(bog_m3 * lng_density / 1000) # BOG in Tonnes
+
+df = pd.DataFrame({'Day': range(1, 31), 'Inventory (m³)': inventory, 'BOG (Tonnes)': bog_rates})
+df['Inventory (%)'] = (df['Inventory (m³)'] / cap_val) * 100
+
+# ==========================================
+# 3. ANIMATED TANK VISUALIZATION
+# ==========================================
+st.subheader(f"🎬 Live Tank Status: {scenario}")
+col_tank, col_metrics = st.columns([1, 2])
+
+with col_tank:
+    # Simulate the tank with a dynamic Gauge
+    latest_level = df['Inventory (%)'].iloc[-1]
+    fig_tank = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = latest_level,
+        title = {'text': "LNG Tank Level (%)"},
+        gauge = {
+            'axis': {'range': [0, 100]},
+            'bar': {'color': "#00CC96" if latest_level > 15 else "#EF553B"},
+            'steps': [
+                {'range': [0, 15], 'color': "#FFE4E1"}, # Danger zone
+                {'range': [15, 100], 'color': "#E0FFFF"}
+            ],
+            'threshold': {'line': {'color': "red", 'width': 4}, 'value': 10}
+        }
+    ))
+    fig_tank.update_layout(height=300, margin=dict(l=10, r=10, t=50, b=10))
+    st.plotly_chart(fig_tank, use_container_width=True)
+
+with col_metrics:
+    st.metric("Peak BOG Rate", f"{np.max(df['BOG (Tonnes)']):,.0f} Tonnes/Day")
+    st.metric("Total BOG Lost in 30 Days", f"{np.sum(df['BOG (Tonnes)']):,.0f} Tonnes")
+    if scenario == "The Rollover Incident":
+        st.warning("**Significance:** The Rollover caused a massive pressure spike, forcing emergency flaring. This proves why density stratification must be monitored.")
+    elif scenario == "FSU Sloshing (High BOG)":
+        st.info("**Significance:** Wave motion in an FSU creates immense sloshing, increasing BOG by up to 70% compared to onshore tanks.")
+
+# ==========================================
+# 4. CHARTS
+# ==========================================
+st.subheader("📉 Time Series Data")
+fig_line = px.line(df, x='Day', y=['Inventory (%)', 'BOG (Tonnes)'], 
+                   title="Inventory vs. BOG Generation",
+                   markers=True)
+st.plotly_chart(fig_line, use_container_width=True)
