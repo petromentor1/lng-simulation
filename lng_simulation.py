@@ -2,103 +2,189 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 
-st.set_page_config(layout="wide", page_title="SA LNG Day 2: BOG & Storage Dynamics")
+st.set_page_config(layout="wide", page_title="SA LNG Day 2: Visual Tank Dynamics")
 
-st.title("🇿🇦 Day 2: LNG Thermodynamics, BOG, and Storage Dynamics")
-st.markdown("Use the sidebar to simulate scenarios. Watch the animated tank and graphs to see how real-world events affect stock levels and Boil-Off Gas (BOG).")
+st.title("🇿🇦 Day 2: LNG Storage Dynamics & Visual Animation")
+st.markdown("Use the timeline slider in the sidebar to watch the liquid level, stratification, and sloshing in real-time.")
 
 # ==========================================
-# 1. SIDEBAR CONTROLS & SCENARIOS
+# 1. SIDEBAR CONTROLS
 # ==========================================
-st.sidebar.header("🕹️ Simulation Scenarios")
+st.sidebar.header("🎬 Animation Controls")
 
 scenario = st.sidebar.selectbox(
     "Select Scenario", 
     ["Normal Operations", "The Rollover Incident", "FSU Sloshing (High BOG)"]
 )
 
+# This slider acts as the "playhead" for our animation
+day = st.sidebar.slider("Timeline (Days)", 1, 30, 1, 1)
+
 capacity_m3 = st.sidebar.radio("Storage Type", ["FSU (170,000 m³)", "Onshore (220,000 m³)"])
 cap_val = 170000 if "FSU" in capacity_m3 else 220000
-
-st.sidebar.subheader("Thermodynamic Parameters")
 lng_density = st.sidebar.slider("Initial LNG Density (kg/m³)", 400.0, 480.0, 450.0)
-send_out_mtpa = st.sidebar.slider("Send-Out Rate (Mtpa)", 1.0, 5.0, 3.0)
 
 # ==========================================
-# 2. SIMULATION LOGIC (WITH SCENARIO EVENTS)
+# 2. SIMULATION LOGIC (Calculate state for selected Day)
 # ==========================================
 days = 30
-initial_inv = cap_val * 0.9 # Start at 90%
-send_out_m3_day = ((send_out_mtpa * 1e6) / 365 * 1000) / lng_density
+initial_inv_pct = 90.0 # Start at 90% full
+inventory_history = [initial_inv_pct]
+bog_history = [0]
 
-inventory = []
-bog_rates = []
-
-for day in range(1, days + 1):
-    # Base BOG Rate
+# Simulate the entire month to get the history up to the current day
+for d in range(2, days + 1):
+    current_inv = inventory_history[-1]
     base_bog = 0.10 if "Onshore" in capacity_m3 else 0.15
     
-    # Apply Scenario Modifiers
     if scenario == "FSU Sloshing (High BOG)":
-        base_bog = 0.25 # Constant high boil-off due to wave motion
-    
-    current_inv = initial_inv if day == 1 else inventory[-1]
-    
-    # The Rollover Event (Day 15)
-    if scenario == "The Rollover Incident" and day == 15:
-        actual_bog_rate = base_bog * 5.0 # 5x spike in BOG due to sudden mixing
-        st.sidebar.error("⚠️ ROLLOVER EVENT TRIGGERED ON DAY 15!")
-    else:
-        actual_bog_rate = base_bog
+        base_bog = 0.30 # High wave motion
         
-    bog_m3 = current_inv * (actual_bog_rate / 100)
-    inventory.append(current_inv - bog_m3 - send_out_m3_day)
-    bog_rates.append(bog_m3 * lng_density / 1000) # BOG in Tonnes
+    # The Rollover Event at Day 15
+    if scenario == "The Rollover Incident" and d == 15:
+        actual_bog = base_bog * 6.0 # 6x spike in BOG
+    else:
+        actual_bog = base_bog
+        
+    bog_m3 = current_inv * (actual_bog / 100)
+    new_inv = current_inv - (bog_m3 / (cap_val/100)) - 0.5 # 0.5% sent out daily
+    inventory_history.append(new_inv)
+    bog_history.append(bog_m3)
 
-df = pd.DataFrame({'Day': range(1, 31), 'Inventory (m³)': inventory, 'BOG (Tonnes)': bog_rates})
-df['Inventory (%)'] = (df['Inventory (m³)'] / cap_val) * 100
+# Get the state for the specifically selected day
+current_inv_pct = max(0, inventory_history[day - 1])
+current_bog = bog_history[day - 1]
 
 # ==========================================
-# 3. ANIMATED TANK VISUALIZATION
+# 3. DRAWING THE PHYSICAL TANK
 # ==========================================
-st.subheader(f"🎬 Live Tank Status: {scenario}")
-col_tank, col_metrics = st.columns([1, 2])
+st.subheader(f"Live Tank Cross-Section (Day {day})")
+
+# Create figure
+fig = go.Figure()
+
+# Tank Geometry
+tank_width = 10
+tank_height = 10
+wall_thickness = 0.2
+
+# Draw the tank walls (Rectangle outline)
+fig.add_shape(type="rect",
+    x0=0, y0=0, x1=tank_width, y1=tank_height,
+    line=dict(color="Black", width=4),
+    fillcolor="rgba(255, 255, 255, 0.1)"
+)
+
+# Liquid Level (Convert % to physical height)
+liquid_height = (current_inv_pct / 100) * tank_height
+
+# 3A. Draw Sloshing Wave Effect
+if "Sloshing" in scenario:
+    # Create a sine wave for the surface
+    x_wave = np.linspace(0, tank_width, 100)
+    # The wave gets more violent if BOG is high
+    amplitude = 0.6 if current_bog > 1.0 else 0.3
+    y_wave = liquid_height + amplitude * np.sin(2 * np.pi * x_wave / 2)
+    
+    # Fill the liquid with the wave top
+    fig.add_trace(go.Scatter(
+        x=np.concatenate([x_wave, x_wave[::-1]]),
+        y=np.concatenate([y_wave, np.zeros(100)]),
+        fill='toself',
+        fillcolor='rgba(0, 150, 255, 0.6)', # Blue LNG
+        line=dict(color='rgba(0,0,0,0)'),
+        name='LNG (Sloshing)'
+    ))
+else:
+    # Flat surface for onshore / normal ops
+    fig.add_shape(type="rect",
+        x0=0, y0=0, x1=tank_width, y1=liquid_height,
+        fillcolor="rgba(0, 150, 255, 0.6)", # Blue LNG
+        line=dict(width=0)
+    )
+
+# 3B. Draw Stratification (Rollover)
+if scenario == "The Rollover Incident":
+    if day < 15:
+        # Before rollover: Dense layer at bottom, light layer on top
+        heavy_layer_height = liquid_height * 0.4
+        # Heavy layer
+        fig.add_shape(type="rect",
+            x0=0, y0=0, x1=tank_width, y1=heavy_layer_height,
+            fillcolor="rgba(255, 100, 0, 0.8)", # Orange heavy LNG
+            line=dict(width=0)
+        )
+        # Light layer
+        fig.add_shape(type="rect",
+            x0=0, y0=heavy_layer_height, x1=tank_width, y1=liquid_height,
+            fillcolor="rgba(0, 150, 255, 0.8)", # Blue light LNG
+            line=dict(width=0)
+        )
+    elif day == 15:
+        # THE ROLLOVER HAPPENS
+        # Everything mixes into one violent purple/brown color
+        fig.add_shape(type="rect",
+            x0=0, y0=0, x1=tank_width, y1=liquid_height,
+            fillcolor="rgba(150, 0, 150, 0.9)", # Mixed color
+            line=dict(width=0)
+        )
+        # Add BOG Bubbles exploding out
+        np.random.seed(42) # Fixed seed for visual consistency
+        bubble_x = np.random.uniform(1, 9, 40)
+        bubble_y = np.random.uniform(liquid_height * 0.5, tank_height, 40)
+        fig.add_trace(go.Scatter(
+            x=bubble_x, y=bubble_y, mode='markers',
+            marker=dict(size=15, color='white', symbol='circle-open', line=dict(width=2)),
+            name='BOG Explosion'
+        ))
+        
+# Add text annotations
+fig.add_annotation(x=tank_width/2, y=liquid_height/2, text=f"{current_inv_pct:.1f}% Full",
+                   showarrow=False, font=dict(color="white", size=16))
+if current_bog > 1.0:
+    fig.add_annotation(x=tank_width/2, y=tank_height + 0.5, text="⚠️ HIGH BOG GENERATION",
+                       showarrow=False, font=dict(color="red", size=16))
+
+# Formatting
+fig.update_layout(
+    xaxis=dict(range=[-1, tank_width + 1], showgrid=False, zeroline=False, visible=False),
+    yaxis=dict(range=[-1, tank_height + 2], showgrid=False, zeroline=False, visible=False),
+    height=500,
+    plot_bgcolor='rgba(240, 240, 240, 1)',
+    margin=dict(l=20, r=20, t=20, b=20)
+)
+
+col_tank, col_info = st.columns([2, 1])
 
 with col_tank:
-    # Simulate the tank with a dynamic Gauge
-    latest_level = df['Inventory (%)'].iloc[-1]
-    fig_tank = go.Figure(go.Indicator(
-        mode = "gauge+number",
-        value = latest_level,
-        title = {'text': "LNG Tank Level (%)"},
-        gauge = {
-            'axis': {'range': [0, 100]},
-            'bar': {'color': "#00CC96" if latest_level > 15 else "#EF553B"},
-            'steps': [
-                {'range': [0, 15], 'color': "#FFE4E1"}, # Danger zone
-                {'range': [15, 100], 'color': "#E0FFFF"}
-            ],
-            'threshold': {'line': {'color': "red", 'width': 4}, 'value': 10}
-        }
-    ))
-    fig_tank.update_layout(height=300, margin=dict(l=10, r=10, t=50, b=10))
-    st.plotly_chart(fig_tank, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True)
 
-with col_metrics:
-    st.metric("Peak BOG Rate", f"{np.max(df['BOG (Tonnes)']):,.0f} Tonnes/Day")
-    st.metric("Total BOG Lost in 30 Days", f"{np.sum(df['BOG (Tonnes)']):,.0f} Tonnes")
+with col_info:
+    st.subheader("System State")
+    st.metric("Inventory", f"{current_inv_pct:.1f} %")
+    st.metric("BOG Rate", f"{current_bog:.2f} % / day")
+    
     if scenario == "The Rollover Incident":
-        st.warning("**Significance:** The Rollover caused a massive pressure spike, forcing emergency flaring. This proves why density stratification must be monitored.")
-    elif scenario == "FSU Sloshing (High BOG)":
-        st.info("**Significance:** Wave motion in an FSU creates immense sloshing, increasing BOG by up to 70% compared to onshore tanks.")
+        if day < 15:
+            st.info("**Stratification:** Heavier LNG (orange) is trapped at the bottom. Heat is being absorbed, but it can't boil because the lighter layer (blue) is pressing down on it.")
+        elif day == 15:
+            st.error("**ROLLOVER!** The bottom layer finally warmed up enough to become lighter than the top layer. They violently mixed in seconds, releasing massive pressure and BOG.")
+        else:
+            st.success("**Post-Rollover:** The tank is now uniform, but we lost massive amounts of gas.")
+            
+    elif "Sloshing" in scenario:
+        st.warning("**Sloshing:** Wave motion against the tank walls drastically increases the surface area of the liquid, causing rapid evaporation (BOG).")
 
-# ==========================================
-# 4. CHARTS
-# ==========================================
-st.subheader("📉 Time Series Data")
-fig_line = px.line(df, x='Day', y=['Inventory (%)', 'BOG (Tonnes)'], 
-                   title="Inventory vs. BOG Generation",
-                   markers=True)
+# Historical Graph
+st.subheader("Historical Trends")
+df = pd.DataFrame({'Day': range(1, 31), 'Inventory (%)': inventory_history, 'BOG (%)': bog_history})
+fig_line = go.Figure()
+fig_line.add_trace(go.Scatter(x=df['Day'], y=df['Inventory (%)'], name='Inventory (%)', line=dict(color='blue')))
+fig_line.add_trace(go.Bar(x=df['Day'], y=df['BOG (%)'], name='BOG Generation', yaxis='y2', opacity=0.5))
+fig_line.update_layout(
+    yaxis=dict(title='Inventory (%)', range=[0, 100]),
+    yaxis2=dict(title='BOG (%)', overlaying='y', side='right'),
+    hovermode='x unified'
+)
 st.plotly_chart(fig_line, use_container_width=True)
