@@ -188,10 +188,12 @@ with tab1:
         frames.append(go.Frame(data=frame, name=str(i)))
 
     fig3d = go.Figure(data=frames[0].data, frames=frames)
+    
+    # FIXED TYPO HERE: Changed updatemenu to updatemenus
     fig3d.update_layout(
         scene=dict(xaxis=dict(visible=False, range=[-6,6]), yaxis=dict(visible=False, range=[-6,6]), zaxis=dict(visible=False, range=[0,13]),
                    camera=dict(eye=dict(x=1.5, y=1.5, z=0.8)), aspectmode='manual', aspectratio=dict(x=1,y=1,z=1.3)),
-        updatemenu=[dict(type="buttons", showactive=False, x=0.1, y=0,
+        updatemenus=[dict(type="buttons", showactive=False, x=0.1, y=0,
             buttons=[
                 dict(label="▶️ Play Animation", method="animate", args=[None, dict(frame=dict(duration=100, redraw=True), fromcurrent=True)]),
                 dict(label="⏸️ Pause", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate")])
@@ -215,7 +217,7 @@ with tab1:
     st.plotly_chart(fig_ops, use_container_width=True)
 
 # ==========================================
-# TAB 2: CCGT & ENVIRONMENT (Unchanged)
+# TAB 2: CCGT & ENVIRONMENT
 # ==========================================
 with tab2:
     st.subheader("⚡ CCGT Output & Environmental Impact")
@@ -227,8 +229,37 @@ with tab2:
     else: c4.metric("Power Exported to Zimbabwe", "0 MW", "No Agreement")
 
 # ==========================================
-# TAB 3: CASE STUDIES (Unchanged)
+# TAB 3: 20 CASE STUDIES
 # ==========================================
 with tab3:
     st.subheader("📖 20 Strategic Case Studies for Delegates")
-    # (Insert the case studies list here from previous message)
+    st.markdown("Use the sliders in the sidebar to recreate these exact scenarios and drive the negotiation.")
+
+    case_studies = [
+        ("1. Baseline FSU vs Onshore", "Storage = FSU vs Onshore, Normal Ops", "FSU: Higher BOG. Onshore: Lower BOG.", "Buyer: Wants Onshore for savings. Seller: Wants FSU for speed. Regulator: Prefers Onshore for safety."),
+        ("2. The Zeebrugge Rollover", "Scenario = Rollover, Timeline = Day 15", "Pressure spikes to 16 bar. 3D tank turns purple. Massive BOG loss.", "Buyer: Suffers financial loss. Seller: Disputes cargo quality. Regulator: Demands stricter safety audits."),
+        ("3. The Maritime Storm", "Scenario = FSU Sloshing, Storage = FSU", "3D tank waves violently. BOG spikes.", "Seller: Benefits (Buyer needs more gas). Regulator: Flags marine infrastructure risk."),
+        ("4. Berthing Delay (Port Congestion)", "Berthing Delay = 5 Days, Normal Ops", "Inventory drops to critical levels before cargo unloads.", "Buyer: Panics about blackouts. Seller: Angolan ship is stuck at anchor, losing demurrage money."),
+        ("5. Loading Arm Failure", "Loading Arm Rate = 50%", "Unloading takes twice as long, forcing the ship to stay docked.", "Buyer: Pays higher port fees. Seller: Ship is delayed for its next Angolan cargo."),
+        ("6. Capacity Utilization (50%)", "Send-Out Rate = 1.5 Mtpa", "CCGT power drops to 1,300 MW. BOG remains high.", "Buyer: Stranded asset. Regulator: Low power output for the region."),
+        ("7. Capacity Sharing (Zimbabwe Deal)", "Check 'Share 20% Capacity'", "SA power drops by 20%, but Zimbabwe gets 500 MW.", "Buyer: Loses revenue but gains political leverage. Regulator: Secures power for Harare."),
+        ("8. Maximum Send-Out (Winter Peak)", "Send-Out = 5.0 Mtpa", "Power spikes to 3,100 MW. Inventory drains in days.", "Buyer: Huge revenue, but risks tank running dry. Seller: Loves the high demand."),
+        ("9. The Environmental Penalty", "Methane Slip = 2.0%", "High methane tonnage emitted.", "Regulator: Slaps SA with carbon taxes. Buyer: Must upgrade CCGT combustors."),
+        ("10. Cold Energy Integration", "Toggle Cold Energy ON/OFF", "Efficiency jumps from 49% to 58%.", "Buyer: Massive economic win. Seller: Happy the gas is used efficiently."),
+        ("11. Heatwave Crisis", "Ambient Temp = 45°C", "BOG rate increases significantly.", "Buyer: Loses LNG to evaporation. Regulator: Warns of global warming impacts."),
+        ("12. Low Electricity Price", "Electricity Price = R1.00/kWh", "Revenue plummets.", "Buyer: Threatens to cancel LNG contracts because CCGT is unprofitable. Seller: Panics."),
+        ("13. Cargo Cancellation", "Normal Ops, slide timeline to 25", "Tank hits 5% and blackout occurs.", "Seller: Defaulted on delivery. Buyer: Sues for breach of contract."),
+        ("14. SAPP Emergency", "Capacity Share ON, Send-Out = 5.0", "Max power generation shared with Zimbabwe.", "Regulator: Zimbabwe avoids a national grid collapse."),
+        ("15. Fuel Gas vs Flaring", "N/A (Conceptual)", "BOG is captured instead of flared.", "Regulator: Environmental win. Buyer: Saves money by using BOG to run the plant."),
+        ("16. Stratification (Slow Mix)", "Normal Ops, watch tank layers", "Orange and Blue layers form slowly.", "Buyer: Needs advanced DLR radar to monitor layers."),
+        ("17. FSU vs Onshore CAPEX", "N/A (Financial)", "FSU CAPEX = $500m, Onshore CAPEX = $1.2b.", "Buyer: Chooses FSU to save $700m. Regulator: Worries about long-term marine reliability."),
+        ("18. Angolan Seller Premium", "N/A (Commercial)", "Angola demands higher price for 'rich' gas.", "Seller: Argues high ethane content means better heating value. Buyer: Argues it causes more BOG."),
+        ("19. The Blackout", "Inventory = 0%", "CCGT power = 0 MW. Total grid failure.", "Buyer: Catastrophe. Regulator: Demands backup diesel generation."),
+        ("20. The 20-Year Outlook", "N/A (Strategic)", "Solar and wind power increase.", "Buyer: LNG CCGT becomes a 'peaker' plant. Seller: Must find new buyers."),
+    ]
+
+    for title, action, output, sig in case_studies:
+        with st.expander(title):
+            st.markdown(f"**Action:** {action}")
+            st.markdown(f"**Output:** {output}")
+            st.markdown(f"**Significance:** {sig}")
