@@ -9,71 +9,92 @@ st.set_page_config(layout="wide", page_title="SA LNG & CCGT Master Dashboard")
 st.title("🇿🇦 South Africa LNG Import & Power Generation Master Dashboard")
 
 # ==========================================
-# 1. SIDEBAR CONTROLS
+# 1. ENRICHED SIDEBAR CONTROLS & EXPLANATIONS
 # ==========================================
-st.sidebar.header("🕹️ Global Controls")
+st.sidebar.header("🕹️ Simulation Controls")
 
 scenario = st.sidebar.selectbox(
     "Select Scenario", 
-    ["Normal Operations (with Cargo Deliveries)", "The Rollover Incident", "FSU Sloshing (High BOG)"]
+    ["Normal Operations (Cargo Deliveries)", "The Rollover Incident", "FSU Sloshing (High BOG)"],
+    help="Choose the operational event. Rollover simulates the violent mixing of LNG layers. FSU Sloshing simulates wave motion increasing BOG."
 )
 
-storage_type = st.sidebar.radio("Storage Type", ["FSU (170,000 m³)", "Onshore (220,000 m³)"])
+storage_type = st.sidebar.radio(
+    "Storage Type", 
+    ["FSU (170,000 m³)", "Onshore (220,000 m³)"],
+    help="Floating Storage Units (FSU) are ships. Onshore tanks are concrete structures. FSUs experience sloshing and generally have higher BOG rates."
+)
 cap_val = 170000 if "FSU" in storage_type else 220000
 
-current_day = st.sidebar.slider("Timeline (Days)", 1, 30, 1, 1)
+current_day = st.sidebar.slider(
+    "Timeline (Days)", 1, 30, 1, 1,
+    help="Scrub through the 30-day simulation. Watch the 3D tank and graphs update in real-time."
+)
 
-st.sidebar.header("⚡ CCGT Settings")
-send_out_mtpa = st.sidebar.slider("Send-Out Rate (Mtpa)", 1.0, 5.0, 3.0, 0.1)
-cold_energy_toggle = st.sidebar.checkbox("Enable LNG Cold Energy Integration", value=True)
+st.sidebar.header("🌡️ Thermodynamics")
+initial_fill = st.sidebar.slider("Initial Tank Fill (%)", 50, 95, 90, 5, help="The starting inventory of LNG in the tank.")
+ambient_temp = st.sidebar.slider("Ambient Temperature (°C)", 15, 45, 30, 1, help="Higher outside temperatures increase heat leak into the tank, generating more BOG.")
+
+st.sidebar.header("⚡ CCGT Economics")
+send_out_mtpa = st.sidebar.slider("Send-Out Rate (Mtpa)", 1.0, 5.0, 3.0, 0.1, help="How much LNG is regasified and sent to the power plant daily.")
+elec_price_zar = st.sidebar.slider("Electricity Price (R/kWh)", 1.0, 5.0, 2.50, 0.1, help="The selling price of electricity to the grid.")
+cold_energy_toggle = st.sidebar.checkbox("Enable LNG Cold Energy Integration", value=True, help="Uses the CCGT's waste heat to vaporize the LNG, boosting plant efficiency from ~49% to ~58%.")
 
 # ==========================================
-# 2. BACKGROUND CALCULATIONS (30 DAYS)
+# 2. BULLETPROOF CALCULATION ENGINE
 # ==========================================
+# Base BOG rates depending on storage
 base_bog = 0.10 if "Onshore" in storage_type else 0.15
-if scenario == "FSU Sloshing (High BOG)" and "FSU" in storage_type:
-    base_bog = 0.30
 
+# Modify BOG based on scenario
+if scenario == "FSU Sloshing (High BOG)":
+    base_bog = 0.35 if "FSU" in storage_type else 0.10
+
+# Modify BOG based on ambient temperature (Every degree above 25C adds 1% to BOG)
+temp_modifier = 1.0 + ((ambient_temp - 25) * 0.01)
+base_bog *= temp_modifier
+
+# Conversions
 lng_density = 450.0 # kg/m3
-# Convert Mtpa to m3/day
 send_out_m3_day = ((send_out_mtpa * 1e9) / 365) / lng_density 
 send_out_pct = (send_out_m3_day / cap_val) * 100
 
-inv_hist = [90.0] # Start 90% full
+inv_hist = [initial_fill]
 bog_hist = []
 press_hist = [1.05]
-cargo_days = []
+event_log = [] # To store text for the dynamic explanation
 
 for d in range(1, 31):
     current_inv = inv_hist[-1]
     
-    # Calculate BOG
+    # Logic for Rollover
     if scenario == "The Rollover Incident" and d == 15:
-        actual_bog_pct = base_bog * 6.0
+        actual_bog_pct = base_bog * 8.0 # Massive 8x spike
         pressure = 16.05
+        event_log.append((d, "ROLLOVER!", "Violent mixing of LNG layers caused extreme BOG."))
     elif scenario == "The Rollover Incident" and d > 15:
         actual_bog_pct = base_bog
-        pressure = 3.05
+        pressure = 3.05 # Elevated pressure
     else:
         actual_bog_pct = base_bog
         pressure = 1.05
         
-    bog_hist.append(current_inv * (actual_bog_pct / 100))
+    bog_rate_val = current_inv * (actual_bog_pct / 100)
+    bog_hist.append(bog_rate_val)
     
     # Calculate New Inventory
-    new_inv = current_inv - (current_inv * (actual_bog_pct / 100)) - send_out_pct
+    new_inv = current_inv - bog_rate_val - send_out_pct
     
-    # Cargo Delivery Logic (If below 20%, refill to 90%)
-    if new_inv < 20.0 and scenario == "Normal Operations (with Cargo Deliveries)":
+    # Cargo Delivery Logic
+    if new_inv < 20.0 and "Normal" in scenario:
         new_inv = 90.0
-        cargo_days.append(d)
-        press_hist.append(1.05) # Pressure normal
-    else:
-        press_hist.append(pressure)
+        pressure = 1.05
+        event_log.append((d, "CARGO DELIVERED", "Tank refilled to 90% capacity."))
         
     inv_hist.append(max(0, new_inv))
+    press_hist.append(pressure)
 
-# Current Day State
+# Extract Current Day State (Index is day-1)
 inv_pct = inv_hist[current_day - 1]
 bog_rate = bog_hist[current_day - 1]
 current_pressure = press_hist[current_day - 1]
@@ -84,10 +105,19 @@ base_eff = 0.4922
 boosted_eff = 0.5831
 eff = boosted_eff if cold_energy_toggle else base_eff
 power_mw = (send_out_mtpa * 1e9 * 48 * eff) / (365 * 24 * 3600)
-revenue_zar = power_mw * 1000 * 24 * 2.50
+revenue_zar = power_mw * 1000 * 24 * elec_price_zar
 
 # ==========================================
-# 3. BUILD THE TABS
+# 3. DYNAMIC EXPLANATION PANEL
+# ==========================================
+st.info(f"**System Status on Day {current_day}:** " + 
+        ("⚠️ **ROLLOVER IN PROGRESS.** The stratified layers have violently mixed, causing a massive pressure spike and BOG generation." if is_rollover_day else
+         "🚢 **Cargo Delivery.** A fresh LNG ship has docked, cooling the tank and refilling the inventory." if any(d == current_day for d, _, _ in event_log) else
+         "🌊 **FSU Sloshing.** Wave motion is increasing the surface area of the liquid, causing higher-than-normal BOG rates." if scenario == "FSU Sloshing" else
+         "✅ **Normal Operations.** The tank is slowly draining as gas is sent to the CCGT."))
+
+# ==========================================
+# 4. BUILD THE TABS
 # ==========================================
 tab1, tab2, tab3 = st.tabs(["🌊 3D Tank Dynamics", "⚡ CCGT Power & Economics", "📖 Case Studies & Physics"])
 
@@ -95,21 +125,17 @@ tab1, tab2, tab3 = st.tabs(["🌊 3D Tank Dynamics", "⚡ CCGT Power & Economics
 # TAB 1: 3D TANK & DYNAMICS
 # ==========================================
 with tab1:
-    st.subheader(f"Live Telemetry: Day {current_day} | {scenario}")
-    
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("LNG Inventory", f"{inv_pct:.1f} %")
-    c2.metric("BOG Rate", f"{bog_rate:.2f} %/day")
-    c3.metric("Tank Pressure", f"{current_pressure:.2f} bar", delta="SPIKE" if current_pressure > 2.0 else None, delta_color="inverse")
+    c1.metric("LNG Inventory", f"{inv_pct:.1f} %", help="Percentage of the tank currently filled with LNG.")
+    c2.metric("BOG Rate", f"{bog_rate:.2f} %/day", help="Boil-Off Gas. The percentage of LNG evaporating daily due to heat leak or sloshing.")
+    c3.metric("Tank Pressure", f"{current_pressure:.2f} bar", delta="SPIKE" if current_pressure > 2.0 else None, delta_color="inverse", help="Internal tank pressure. Dangerous spikes occur during a Rollover.")
     
     if current_day < 15 and scenario == "The Rollover Incident":
-        c4.info("**Stratification Active:** Heavy (Orange) and Light (Blue) layers.")
+        c4.info("**Stratification:** Heavy (Orange) and Light (Blue) layers separated.")
     elif is_rollover_day:
-        c4.error("**ROLLOVER!** Layers mixed violently. Massive BOG spike.")
-    elif current_day in cargo_days:
-        c4.success("**Cargo Delivered!** Tank refilled to 90%.")
+        c4.error("**ROLLOVER!** Layers mixed violently.")
     else:
-        c4.success("**Normal Operations.**")
+        c4.success("**Stable.**")
 
     # --- 3D TANK ANIMATION ---
     R, H, dome_h = 5.0, 10.0, 2.0
@@ -127,28 +153,30 @@ with tab1:
     x_liq, y_liq = r_g * np.cos(th_g), r_g * np.sin(th_g)
 
     frames = []
+    
+    # FIXED: Sloshing amplitude only applies if FSU is selected
     amp = 0.8 if ("Sloshing" in scenario and "FSU" in storage_type) else 0.0
-    if is_rollover_day: amp = 2.0
+    if is_rollover_day: amp = 2.5
 
     tot_h = (inv_pct / 100.0) * H
     split_h = (tot_h * 0.4) if (scenario == "The Rollover Incident" and current_day < 15) else 0.0
 
-    for i in range(20):
+    for i in range(25):
         t = i / 4.0
         z_bot = split_h + amp * np.sin(th_g * 2 + t) * np.cos(r_g)
         z_top = tot_h + amp * np.sin(th_g * 2 + t) * np.cos(r_g)
         
-        num_b = 50 + int(bog_rate * 100)
+        num_b = 50 + int(bog_rate * 150)
         np.random.seed(42)
         b_r, b_th = np.random.uniform(0, R-0.5, num_b), np.random.uniform(0, 2*np.pi, num_b)
-        speed = 0.4 if not is_rollover_day else 2.0
+        speed = 0.4 if not is_rollover_day else 3.0
         b_z = (np.random.uniform(tot_h, H, num_b) + (i * speed)) % (H - tot_h) + tot_h
         b_x, b_y = b_r * np.cos(b_th), b_r * np.sin(b_th)
 
         frame = [
             go.Surface(x=x_liq, y=y_liq, z=z_bot, colorscale=[[0, 'rgba(255,140,0,0.9)'],[1,'rgba(255,140,0,0.9)']], showscale=False, hoverinfo="skip"),
             go.Surface(x=x_liq, y=y_liq, z=z_top, colorscale=[[0, 'rgba(0,150,255,0.9)'],[1,'rgba(0,150,255,0.9)']] if split_h > 0 else [[0, 'rgba(150,0,150,0.9)'],[1,'rgba(150,0,150,0.9)']], showscale=False, hoverinfo="skip"),
-            go.Scatter3d(x=b_x, y=b_y, z=b_z, mode='markers', marker=dict(size=4 if not is_rollover_day else 8, color='white', opacity=0.8), hoverinfo="skip"),
+            go.Scatter3d(x=b_x, y=b_y, z=b_z, mode='markers', marker=dict(size=4 if not is_rollover_day else 10, color='white', opacity=0.8), hoverinfo="skip"),
             go.Surface(x=x_wall, y=y_wall, z=z_gw, colorscale=[[0, 'rgba(200,200,200,0.2)'],[1,'rgba(200,200,200,0.2)']], showscale=False, hoverinfo="skip"),
             go.Surface(x=x_dome, y=y_dome, z=z_dome, colorscale=[[0, 'rgba(150,150,150,0.4)'],[1,'rgba(150,150,150,0.4)']], showscale=False, hoverinfo="skip")
         ]
@@ -160,14 +188,14 @@ with tab1:
                    camera=dict(eye=dict(x=1.5, y=1.5, z=0.8)), aspectmode='manual', aspectratio=dict(x=1,y=1,z=1.3)),
         updatemenus=[dict(type="buttons", showactive=False, x=0.1, y=0,
             buttons=[
-                dict(label="▶️ Play Waves", method="animate", args=[None, dict(frame=dict(duration=100, redraw=True), fromcurrent=True)]),
+                dict(label="▶️ Play Animation", method="animate", args=[None, dict(frame=dict(duration=100, redraw=True), fromcurrent=True)]),
                 dict(label="⏸️ Pause", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate")])
             ])],
         margin=dict(l=0, r=0, b=0, t=0), height=450, paper_bgcolor="#f4f4f4"
     )
     st.plotly_chart(fig3d, use_container_width=True)
 
-    # --- 30 DAY GRAPH ---
+    # --- 30 DAY GRAPH (Dynamic) ---
     df_ops = pd.DataFrame({'Day': range(1, 31), 'Inventory (%)': inv_hist[:-1], 'BOG Rate (%/day)': bog_hist, 'Pressure (bar)': press_hist[:-1]})
     fig_ops = make_subplots(specs=[[{"secondary_y": True}]])
     fig_ops.add_trace(go.Scatter(x=df_ops['Day'], y=df_ops['Inventory (%)'], name='Inventory (%)', line=dict(color='blue', width=3)), secondary_y=False)
@@ -197,9 +225,9 @@ with tab1:
 with tab2:
     st.subheader("⚡ CCGT Power Generation & Economics")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Current CCGT Output", f"{power_mw:,.0f} MW", f"{eff*100:.1f}% Efficiency")
-    c2.metric("Estimated Daily Revenue", f"R {revenue_zar:,.0f}")
-    c3.metric("Annual CO2 Avoided", f"~{power_mw * 0.4 * 24 * 365 / 1000:,.0f} kt", "vs Coal")
+    c1.metric("Current CCGT Output", f"{power_mw:,.0f} MW", f"{eff*100:.1f}% Efficiency", help="The total electrical power generated by the Combined Cycle Gas Turbine.")
+    c2.metric("Estimated Daily Revenue", f"R {revenue_zar:,.0f}", help="Calculated using your daily power output multiplied by your chosen electricity price.")
+    c3.metric("Annual CO2 Avoided", f"~{power_mw * 0.4 * 24 * 365 / 1000:,.0f} kt", "vs Coal", help="LNG produces significantly less CO2 than coal. This is the estimated annual saving.")
 
     st.markdown("### The Impact of LNG Cold Energy")
     st.markdown("When LNG regasifies, it releases immense cold energy. By integrating this with the CCGT, we can boost efficiency dramatically.")
@@ -230,7 +258,7 @@ with tab3:
 
     st.markdown("### 2. FSU Sloshing vs. Onshore Tanks")
     st.markdown("""
-    *   **How to simulate:** Select **'FSU Sloshing'** and click **Play Waves** on the 3D tank.
+    *   **How to simulate:** Select **'FSU Sloshing'** and click **Play Animation** on the 3D tank.
     *   **What happened:** An FSU is a ship on the ocean. As waves hit it, the LNG inside sloshes back and forth. This kinetic energy accelerates evaporation.
     *   **The Result:** A floating tank generates 50% to 100% more BOG than an onshore concrete tank. While an FSU is cheaper to build (CAPEX), the daily BOG losses add up to millions of Rand over 20 years (OPEX).
     """)
