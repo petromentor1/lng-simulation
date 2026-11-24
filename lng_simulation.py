@@ -122,7 +122,7 @@ methane_emitted_tons = (power_mw * 24 * 3600 / 48) * (methane_slip / 100) / 1000
 tab1, tab2, tab3 = st.tabs(["🌊 3D Tank Dynamics", "⚡ CCGT & Environment", "📖 20 Case Studies"])
 
 # ==========================================
-# TAB 1: 3D TANK & DYNAMICS (Same as before)
+# TAB 1: 3D TANK & DYNAMICS
 # ==========================================
 with tab1:
     c1, c2, c3, c4 = st.columns(4)
@@ -137,16 +137,87 @@ with tab1:
     else:
         c4.success("✅ Stable.")
 
-    # 3D Animation Logic (Simplified for brevity, uses same geometry as before)
-    # [Insert 3D Tank Code Here - Omitted for space, use exact same block from previous code]
+    # --- 3D TANK ANIMATION ---
+    R, H, dome_h = 5.0, 10.0, 2.0
+    th_w = np.linspace(0, 2*np.pi, 40); z_w = np.linspace(0, H, 15)
+    th_gw, z_gw = np.meshgrid(th_w, z_w)
+    x_wall, y_wall = R * np.cos(th_gw), R * np.sin(th_gw)
+
+    u = np.linspace(0, 2*np.pi, 40); v = np.linspace(0, np.pi/2, 10)
+    u_g, v_g = np.meshgrid(u, v)
+    x_dome = R * np.cos(u_g) * np.sin(v_g); y_dome = R * np.sin(u_g) * np.sin(v_g)
+    z_dome = H + dome_h * np.cos(v_g)
+
+    r_l = np.linspace(0, R, 20); th_l = np.linspace(0, 2*np.pi, 40)
+    r_g, th_g = np.meshgrid(r_l, th_l)
+    x_liq, y_liq = r_g * np.cos(th_g), r_g * np.sin(th_g)
+
+    frames = []
+    
+    amp = 0.8 if ("Sloshing" in scenario and "FSU" in storage_type) else 0.0
+    is_rollover_day = (scenario == "The Rollover Incident" and current_day == 15)
+    if is_rollover_day: amp = 2.5
+
+    tot_h = (inv_pct / 100.0) * H
+    split_h = (tot_h * 0.4) if (scenario == "The Rollover Incident" and current_day < 15) else 0.0
+
+    for i in range(25):
+        t = i / 4.0
+        z_bot = split_h + amp * np.sin(th_g * 2 + t) * np.cos(r_g)
+        z_top = tot_h + amp * np.sin(th_g * 2 + t) * np.cos(r_g)
+        
+        num_b = 50 + int(bog_rate * 150)
+        np.random.seed(42)
+        b_r, b_th = np.random.uniform(0, R-0.5, num_b), np.random.uniform(0, 2*np.pi, num_b)
+        speed = 0.4 if not is_rollover_day else 3.0
+        b_z = (np.random.uniform(tot_h, H, num_b) + (i * speed)) % (H - tot_h) + tot_h
+        b_x, b_y = b_r * np.cos(b_th), b_r * np.sin(b_th)
+
+        frame = [
+            go.Surface(x=x_liq, y=y_liq, z=z_bot, colorscale=[[0, 'rgba(255,140,0,0.9)'],[1,'rgba(255,140,0,0.9)']], showscale=False, hoverinfo="skip"),
+            go.Surface(x=x_liq, y=y_liq, z=z_top, colorscale=[[0, 'rgba(0,150,255,0.9)'],[1,'rgba(0,150,255,0.9)']] if split_h > 0 else [[0, 'rgba(150,0,150,0.9)'],[1,'rgba(150,0,150,0.9)']], showscale=False, hoverinfo="skip"),
+            go.Scatter3d(x=b_x, y=b_y, z=b_z, mode='markers', marker=dict(size=4 if not is_rollover_day else 10, color='white', opacity=0.8), hoverinfo="skip"),
+            go.Surface(x=x_wall, y=y_wall, z=z_gw, colorscale=[[0, 'rgba(200,200,200,0.2)'],[1,'rgba(200,200,200,0.2)']], showscale=False, hoverinfo="skip"),
+            go.Surface(x=x_dome, y=y_dome, z=z_dome, colorscale=[[0, 'rgba(150,150,150,0.4)'],[1,'rgba(150,150,150,0.4)']], showscale=False, hoverinfo="skip")
+        ]
+        frames.append(go.Frame(data=frame, name=str(i)))
+
+    fig3d = go.Figure(data=frames[0].data, frames=frames)
+    fig3d.update_layout(
+        scene=dict(xaxis=dict(visible=False, range=[-6,6]), yaxis=dict(visible=False, range=[-6,6]), zaxis=dict(visible=False, range=[0,13]),
+                   camera=dict(eye=dict(x=1.5, y=1.5, z=0.8)), aspectmode='manual', aspectratio=dict(x=1,y=1,z=1.3)),
+        updatemenus=[dict(type="buttons", showactive=False, x=0.1, y=0,
+            buttons=[
+                dict(label="▶️ Play Animation", method="animate", args=[None, dict(frame=dict(duration=100, redraw=True), fromcurrent=True)]),
+                dict(label="⏸️ Pause", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate")])
+            ])],
+        margin=dict(l=0, r=0, b=0, t=0), height=450, paper_bgcolor="#f4f4f4"
+    )
+    st.plotly_chart(fig3d, use_container_width=True)
+
     # --- 30 DAY GRAPH ---
-    df_ops = pd.DataFrame({'Day': range(1, 31), 'Inventory (%)': inv_hist[:-1], 'BOG Rate (%/day)': bog_hist})
+    df_ops = pd.DataFrame({'Day': range(1, 31), 'Inventory (%)': inv_hist[:-1], 'BOG Rate (%/day)': bog_hist, 'Pressure (bar)': press_hist[:-1]})
     fig_ops = make_subplots(specs=[[{"secondary_y": True}]])
     fig_ops.add_trace(go.Scatter(x=df_ops['Day'], y=df_ops['Inventory (%)'], name='Inventory (%)', line=dict(color='blue', width=3)), secondary_y=False)
     fig_ops.add_trace(go.Scatter(x=df_ops['Day'], y=df_ops['BOG Rate (%/day)'], name='BOG Rate', line=dict(color='red', dash='dot')), secondary_y=True)
+    if scenario == "The Rollover Incident":
+        fig_ops.add_trace(go.Scatter(x=df_ops['Day'], y=df_ops['Pressure (bar)'], name='Pressure (bar)', line=dict(color='orange', width=2)), secondary_y=True)
+    
     fig_ops.add_vline(x=current_day, line_width=3, line_dash="dash", line_color="green")
-    fig_ops.update_layout(title="30-Day Operational Trends", hovermode="x unified", height=400)
+    fig_ops.update_layout(title="30-Day Operational Trends", hovermode="x unified", height=350, margin=dict(l=0, r=0, t=40, b=0), legend=dict(orientation="h", y=1.02, x=1))
+    fig_ops.update_yaxes(title_text="Inventory (%)", secondary_y=False, range=[0, 100])
+    fig_ops.update_yaxes(title_text="BOG / Pressure", secondary_y=True)
     st.plotly_chart(fig_ops, use_container_width=True)
+
+    # --- LEGEND ---
+    st.markdown("""
+    ### 📖 3D Tank Legend
+    *   **🟠 Orange Liquid (Bottom):** Dense, warmer LNG (caused by ground heat leak).
+    *   **🔵 Blue Liquid (Top):** Lighter, colder LNG from a fresh cargo.
+    *   **🟣 Purple Liquid:** Fully mixed LNG (this is what happens after a Rollover).
+    *   **⚪ White Bubbles:** Boil-Off Gas (BOG) rising to the top.
+    *   **Silver Dome:** The insulated roof of the LNG storage tank.
+    """)
 
 # ==========================================
 # TAB 2: CCGT & ENVIRONMENT
