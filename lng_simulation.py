@@ -54,13 +54,13 @@ send_out_m3_day = ((actual_send_out * 1e9) / 365) / lng_density
 send_out_pct = (send_out_m3_day / cap_val) * 100
 
 inv_hist = [initial_fill]
-bog_tonnes_hist = [] # Storing BOG in Tonnes now
+bog_tonnes_hist = [] # Storing actual mass lost in Tonnes
 press_hist = [1.05]
 blackout_flag = False
 cargo_delivered = False
 
 for d in range(1, 31):
-    current_inv = inv_hist[-1]
+    current_inv_pct = inv_hist[-1]
     
     if scenario == "The Rollover Incident" and d == 15:
         actual_bog_pct = base_bog * 8.0
@@ -72,26 +72,28 @@ for d in range(1, 31):
         actual_bog_pct = base_bog
         pressure = 1.05
         
-    bog_m3_val = current_inv * (actual_bog_pct / 100)
-    bog_tonnes_val = (bog_m3_val * lng_density) / 1000 # Convert m3 to Tonnes
+    # CORRECTED MATH: Calculate actual volume and mass
+    current_vol_m3 = (current_inv_pct / 100.0) * cap_val
+    bog_m3_val = current_vol_m3 * (actual_bog_pct / 100.0)
+    bog_tonnes_val = (bog_m3_val * lng_density) / 1000.0 # Convert kg to Tonnes
     bog_tonnes_hist.append(bog_tonnes_val)
     
     # Inventory Drop (in %)
-    new_inv = current_inv - (bog_m3_val / cap_val * 100) - send_out_pct
+    new_inv_pct = current_inv_pct - (bog_m3_val / cap_val * 100) - send_out_pct
     
     # Cargo Logic
     delivery_target = 20.0 + (berthing_delay * 5.0)
-    if new_inv < delivery_target and "Normal" in scenario and not cargo_delivered:
-        new_inv = 90.0
+    if new_inv_pct < delivery_target and "Normal" in scenario and not cargo_delivered:
+        new_inv_pct = 90.0
         cargo_delivered = True
-    elif cargo_delivered and new_inv < 85.0:
+    elif cargo_delivered and new_inv_pct < 85.0:
         cargo_delivered = False
         
-    if new_inv <= 0.1:
-        new_inv = 0.0
+    if new_inv_pct <= 0.1:
+        new_inv_pct = 0.0
         blackout_flag = True
         
-    inv_hist.append(max(0, new_inv))
+    inv_hist.append(max(0, new_inv_pct))
     press_hist.append(pressure)
 
 inv_pct = inv_hist[current_day - 1]
@@ -123,7 +125,7 @@ with tab1:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("LNG Inventory", f"{inv_pct:.1f} %")
     
-    # CHANGED: Now showing Tonnes/Day instead of %
+    # CHANGED: Now showing Tonnes/Day
     c2.metric("BOG Loss", f"{bog_tonnes_day:,.1f} Tons/day", help="The actual physical mass of LNG evaporating every day.")
     
     c3.metric("Tank Pressure", f"{current_pressure:.2f} bar", delta="SPIKE" if current_pressure > 2.0 else None, delta_color="inverse")
@@ -155,6 +157,7 @@ with tab1:
     if is_rollover_day: amp = 2.5
 
     tot_h = (inv_pct / 100.0) * H
+    # STRATIFICATION LOGIC: Only split layers if rollover and before day 15
     split_h = (tot_h * 0.4) if (scenario == "The Rollover Incident" and current_day < 15) else 0.0
 
     for i in range(25):
@@ -162,10 +165,10 @@ with tab1:
         z_bot = split_h + amp * np.sin(th_g * 2 + t) * np.cos(r_g)
         z_top = tot_h + amp * np.sin(th_g * 2 + t) * np.cos(r_g)
         
-        # FIXED: Capped the number of bubbles so Plotly doesn't crash
+        # CORRECTED BUBBLE COUNT
         num_b = int(20 + (bog_tonnes_day * 0.5)) 
-        if is_rollover_day: num_b = 400 # Massive visual explosion
-        num_b = min(num_b, 500) # Hard cap at 500 markers
+        if is_rollover_day: num_b = 400 
+        num_b = min(num_b, 500) # Hard cap to prevent browser crash
         
         np.random.seed(42)
         b_r, b_th = np.random.uniform(0, R-0.5, num_b), np.random.uniform(0, 2*np.pi, num_b)
@@ -173,6 +176,7 @@ with tab1:
         b_z = (np.random.uniform(tot_h, H, num_b) + (i * speed)) % (H - tot_h) + tot_h
         b_x, b_y = b_r * np.cos(b_th), b_r * np.sin(b_th)
 
+        # RESTORED: The exact layering that looked great before
         frame = [
             go.Surface(x=x_liq, y=y_liq, z=z_bot, colorscale=[[0, 'rgba(255,140,0,0.9)'],[1,'rgba(255,140,0,0.9)']], showscale=False, hoverinfo="skip"),
             go.Surface(x=x_liq, y=y_liq, z=z_top, colorscale=[[0, 'rgba(0,150,255,0.9)'],[1,'rgba(0,150,255,0.9)']] if split_h > 0 else [[0, 'rgba(150,0,150,0.9)'],[1,'rgba(150,0,150,0.9)']], showscale=False, hoverinfo="skip"),
